@@ -96,3 +96,136 @@ image_center = width // 2
 left_lane_x = get_lane_x(left_lines, height)
 right_lane_x = get_lane_x(right_lines, height)
 ```
+Hough로 찾은 선분들의 x좌표를 이용.  
+왼쪽 차선과 오른쪽 차선을 이미지 맨 아래까지 연장했을 때  
+각각 x좌표가 어디인지 계산.
+
+### 3.차선 중심 계산
+```py
+if left_lane_x is not None and right_lane_x is not None:
+        lane_center = (left_lane_x + right_lane_x) // 2
+        lane_error = image_center - lane_center
+
+        cv2.line(result, (left_lane_x, height), (left_lane_x, int(height * 0.55)), (255, 0, 0), 3)
+        cv2.line(result, (right_lane_x, height), (right_lane_x, int(height * 0.55)), (0, 255, 0), 3)
+```
+왼쪽 차선과 오른쪽 차선이 둘 다 있으면 두 차선의 가운데를 차선 중심으로 잡음
+
+한 쪽 차선이 인식 안 될 경우
+```py
+elif left_lane_x is not None:
+        lane_center = left_lane_x + 300
+        lane_error = image_center - lane_center
+        cv2.line(result, (left_lane_x, height), (left_lane_x, int(height * 0.55)), (255, 0, 0), 3)
+
+    elif right_lane_x is not None:
+        lane_center = right_lane_x - 300
+        lane_error = image_center - lane_center
+        cv2.line(result, (right_lane_x, height), (right_lane_x, int(height * 0.55)), (0, 255, 0), 3)
+```
+300인 이유: 고정된 차선 폭을 가정한 값. 사진의 크기를
+```py
+img = cv2.resize(img, (900, 500))
+```
+로 고정했기 때문에 사진상에서는 차선 폭이 약 300픽셀 정도로 보인다고 판단해서 넣은 값  
+즉 차선 폭의 절반이 아니라, 이 코드에서 차선 중앙을 추정하기 위해 경험적으로 넣은 오프셋 값  
+
+카메라 보정(IPM/Bird's Eye View)을 통해 실제 차선 폭을 계산하는 방법이 더 좋은 방법
+
+### 4.lane error 계산
+```py
+lane_error = image_center - lane_center
+```
+이 코드의 예시는
+```
+이미지 중앙 = 450
+차선 중앙 = 500
+lane error = 450 - 500 = -50
+```
+이러면 차선 중앙이 이미지 중앙보다 오른쪽에 있다는 뜻  
+즉 차량을 기준으로 보면 중앙에서 벗어나 있다는 뜻 이다.  
+
+### 5.화면에 표시
+```py
+cv2.putText(result, f"Image Center: {image_center}", (30, 40),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+
+cv2.putText(result, f"Lane Center: {lane_center}", (30, 75),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
+
+cv2.putText(result, f"Lane Error: {lane_error} px", (30, 110),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 0), 2)
+```
+
+# Level 3.Hough Line으로 차선 직선 검출하기
+
+Level 3은 “Canny로 찾은 경계선 중에서 진짜 차선처럼 생긴 직선을 찾는 단계”
+
+### 1.Canny edge 적용
+```py
+edge = cv2.Canny(blur, 50, 150)
+```
+이미지에서 선처럼 보이는 경계를 먼저 찾는다
+
+### 2.HoughLinesP로 선분 검출
+```py
+lines = cv2.HoughLinesP(
+    roi,
+    rho=1,
+    theta=np.pi / 180,
+    threshold=35,
+    minLineLength=35,
+    maxLineGap=90
+)
+```
+roi 안에서 직선을 찾는다.
+
+### 3.너무 수평인 선 제외
+```py
+slope = (y2 - y1) / (x2 - x1)
+
+if abs(slope) < 0.4:
+    continue
+```
+차선은 보통 화면에서 비스듬하게 보이는데 너무 수평인 선은 차선이 아닐 가능성이 높음  
+그래서 기울기의 절댓값이 0.4보다 작으면 버림
+
+### 4.왼쪽 차선 / 오른쪽 차선 분리
+```py
+if slope < 0:
+    left_lines.append((x1, y1, x2, y2))
+else:
+    right_lines.append((x1, y1, x2, y2))
+```
+기울기를 보고 왼쪽 차선과 오른쪽 차선을 나눔
+```
+기울기 < 0  → 왼쪽 차선
+기울기 > 0  → 오른쪽 차선
+```
+
+### 5.검출된 선분을 원본 위에 그리기
+```py
+cv2.line(result, (x1, y1), (x2, y2), (255, 0, 0), 3)
+```
+왼쪽 차선 후보는 파란색으로 그림.
+
+```py
+cv2.line(result, (x1, y1), (x2, y2), (0, 255, 0), 3)
+```
+오른쪽 차선 후보는 초록색으로 그림.
+
+### 6.차선 중심과 lane error 계산
+```py
+left_lane_x = get_lane_x(left_lines, height)
+right_lane_x = get_lane_x(right_lines, height)
+```
+왼쪽 / 오른쪽 차선을 아래쪽까지 연장해서 x좌표를 구함
+
+```py
+lane_center = (left_lane_x + right_lane_x) // 2
+lane_error = image_center - lane_center
+```
+차선 중심을 구하고 이미지 중앙과 비교해서 error를 계산
+
+
+
